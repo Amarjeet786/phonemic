@@ -1,27 +1,59 @@
 <Window x:Class="PhoneMic.Windows.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Phone Mic Receiver" Width="440" Height="520" ResizeMode="CanMinimize">
-    <StackPanel Margin="20">
-        <TextBlock Text="PHONE MIC" FontSize="26" FontWeight="Bold"/>
-        <TextBlock x:Name="StatusText" Text="● Waiting for phone..." Margin="0,6,0,14" FontSize="15" Foreground="Gray"/>
+        Title="Phone Mic Receiver" Width="470" Height="760" MinHeight="500">
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="20">
+            <TextBlock Text="PHONE MIC" FontSize="26" FontWeight="Bold"/>
+            <TextBlock x:Name="StatusText" Text="● Stopped" Margin="0,6,0,4" FontSize="15" Foreground="Gray"/>
+            <TextBlock x:Name="StatsText" Text="" Foreground="DimGray" TextWrapping="Wrap" Margin="0,0,0,12"/>
 
-        <TextBlock Text="Enter these in the phone app:" FontWeight="SemiBold"/>
-        <TextBlock x:Name="IpText" FontSize="16" Margin="0,4,0,0"/>
-        <TextBlock x:Name="PinText" FontSize="28" FontWeight="Bold" Margin="0,4,0,14"/>
+            <TextBlock Text="Enter these in the phone app:" FontWeight="SemiBold"/>
+            <TextBlock x:Name="IpText" FontSize="14" Margin="0,4,0,0"/>
+            <StackPanel Orientation="Horizontal" Margin="0,4,0,14">
+                <TextBlock x:Name="PinText" FontSize="28" FontWeight="Bold" VerticalAlignment="Center"/>
+                <Button x:Name="NewPinButton" Content="New PIN" Margin="14,0,0,0" Padding="10,4" Click="NewPinButton_Click"/>
+            </StackPanel>
 
-        <TextBlock Text="Output device (choose 'CABLE Input' for a virtual mic)"/>
-        <ComboBox x:Name="DeviceCombo" Margin="0,4,0,12"/>
+            <TextBlock Text="Output device (choose 'CABLE Input' for a virtual mic)"/>
+            <ComboBox x:Name="DeviceCombo" Margin="0,4,0,12"/>
 
-        <TextBlock Text="Input level"/>
-        <ProgressBar x:Name="LevelBar" Height="14" Maximum="100" Margin="0,4,0,12"/>
+            <TextBlock Text="Latency"/>
+            <ComboBox x:Name="LatencyCombo" Margin="0,4,0,12" SelectionChanged="LatencyCombo_SelectionChanged">
+                <ComboBoxItem Content="Ultra Low"/>
+                <ComboBoxItem Content="Low"/>
+                <ComboBoxItem Content="Balanced"/>
+                <ComboBoxItem Content="High Quality"/>
+            </ComboBox>
 
-        <TextBlock Text="Volume"/>
-        <Slider x:Name="VolumeSlider" Minimum="0" Maximum="200" Value="100" ValueChanged="VolumeSlider_ValueChanged" Margin="0,4,0,8"/>
-        <CheckBox x:Name="MuteCheck" Content="Mute" Checked="MuteCheck_Changed" Unchecked="MuteCheck_Changed" Margin="0,0,0,12"/>
+            <TextBlock Text="Input level"/>
+            <ProgressBar x:Name="LevelBar" Height="14" Maximum="100" Margin="0,4,0,12"/>
 
-        <TextBlock x:Name="WarnText" TextWrapping="Wrap" Foreground="DarkOrange" Margin="0,0,0,10"
-                   Text="Tip: if you play to your speakers, use headphones to avoid feedback."/>
-        <Button x:Name="StartButton" Content="START RECEIVER" Height="42" Click="StartButton_Click"/>
-    </StackPanel>
+            <TextBlock Text="Volume"/>
+            <Slider x:Name="VolumeSlider" Minimum="0" Maximum="200" Value="100" ValueChanged="VolumeSlider_ValueChanged" Margin="0,4,0,8"/>
+            <CheckBox x:Name="MuteCheck" Content="Mute" Checked="MuteCheck_Changed" Unchecked="MuteCheck_Changed" Margin="0,0,0,12"/>
+
+            <Border BorderBrush="LightGray" BorderThickness="1" Padding="10" Margin="0,0,0,12">
+                <StackPanel>
+                    <CheckBox x:Name="MonitorCheck" Content="Monitor microphone (listen on headphones)" Checked="MonitorCheck_Changed" Unchecked="MonitorCheck_Changed"/>
+                    <TextBlock Text="Monitor device" Margin="0,8,0,0"/>
+                    <ComboBox x:Name="MonitorCombo" Margin="0,4,0,8"/>
+                    <TextBlock Text="Monitor volume"/>
+                    <Slider x:Name="MonitorSlider" Minimum="0" Maximum="100" Value="50" ValueChanged="MonitorSlider_ValueChanged"/>
+                    <TextBlock Foreground="DarkOrange" TextWrapping="Wrap" Margin="0,6,0,0"
+                               Text="Use headphones for monitoring. Speakers can feed your voice back into the microphone and cause echo."/>
+                </StackPanel>
+            </Border>
+
+            <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                <Button x:Name="RecordButton" Content="● Record" Padding="14,6" Click="RecordButton_Click"/>
+                <TextBlock x:Name="RecordText" VerticalAlignment="Center" Margin="12,0,0,0" TextWrapping="Wrap" MaxWidth="300"/>
+            </StackPanel>
+
+            <CheckBox x:Name="AutoStartCheck" Content="Start Phone Mic automatically with Windows" Checked="AutoStartCheck_Changed" Unchecked="AutoStartCheck_Changed" Margin="0,0,0,6"/>
+            <CheckBox x:Name="TrayCheck" Content="Minimize to the system tray" Checked="TrayCheck_Changed" Unchecked="TrayCheck_Changed" Margin="0,0,0,12"/>
+
+            <Button x:Name="StartButton" Content="START RECEIVER" Height="42" Click="StartButton_Click"/>
+        </StackPanel>
+    </ScrollViewer>
 </Window>

@@ -1,0 +1,27 @@
+<Window x:Class="PhoneMic.Windows.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Phone Mic Receiver" Width="440" Height="520" ResizeMode="CanMinimize">
+    <StackPanel Margin="20">
+        <TextBlock Text="PHONE MIC" FontSize="26" FontWeight="Bold"/>
+        <TextBlock x:Name="StatusText" Text="● Waiting for phone..." Margin="0,6,0,14" FontSize="15" Foreground="Gray"/>
+
+        <TextBlock Text="Enter these in the phone app:" FontWeight="SemiBold"/>
+        <TextBlock x:Name="IpText" FontSize="16" Margin="0,4,0,0"/>
+        <TextBlock x:Name="PinText" FontSize="28" FontWeight="Bold" Margin="0,4,0,14"/>
+
+        <TextBlock Text="Output device (choose 'CABLE Input' for a virtual mic)"/>
+        <ComboBox x:Name="DeviceCombo" Margin="0,4,0,12"/>
+
+        <TextBlock Text="Input level"/>
+        <ProgressBar x:Name="LevelBar" Height="14" Maximum="100" Margin="0,4,0,12"/>
+
+        <TextBlock Text="Volume"/>
+        <Slider x:Name="VolumeSlider" Minimum="0" Maximum="200" Value="100" ValueChanged="VolumeSlider_ValueChanged" Margin="0,4,0,8"/>
+        <CheckBox x:Name="MuteCheck" Content="Mute" Checked="MuteCheck_Changed" Unchecked="MuteCheck_Changed" Margin="0,0,0,12"/>
+
+        <TextBlock x:Name="WarnText" TextWrapping="Wrap" Foreground="DarkOrange" Margin="0,0,0,10"
+                   Text="Tip: if you play to your speakers, use headphones to avoid feedback."/>
+        <Button x:Name="StartButton" Content="START RECEIVER" Height="42" Click="StartButton_Click"/>
+    </StackPanel>
+</Window>

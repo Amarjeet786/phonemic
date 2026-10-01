@@ -11,7 +11,7 @@ android {
         minSdk = 26
         targetSdk = 34
         versionCode = 1
-        versionName = "0.1.0"
+        versionName = "0.3.0"
     }
     buildFeatures { compose = true }
     compileOptions {
@@ -26,4 +26,6 @@ dependencies {
     implementation(platform("androidx.compose:compose-bom:2024.09.00"))
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")
+    // Pure-Java Opus codec (no NDK needed)
+    implementation("io.github.jaredmdobson:concentus:1.0.2")
 }

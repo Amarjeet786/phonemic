@@ -1,4 +1,4 @@
-# Phone Mic (v0.2)
+# Phone Mic
 
 Android phone mic -> (Wi-Fi / USB cable / Bluetooth tethering) -> Windows receiver -> output device.
 Use VB-Cable "CABLE Input" as the output device to get a virtual microphone ("CABLE Output") for Zoom/OBS/Discord.
@@ -14,16 +14,21 @@ Use VB-Cable "CABLE Input" as the output device to get a virtual microphone ("CA
 3. Phone app: connection type चुनें -> "Find my PC" -> PC चुनें -> PIN -> CONNECT.
 4. Zoom/OBS/Discord में microphone = "CABLE Output".
 
-## Features
-- Wi-Fi, USB cable (USB tethering), Bluetooth (Bluetooth tethering; असली BT mic नहीं, delay ज़्यादा).
-- Encrypted audio (AES-256-GCM, key = PIN से) + ADPCM compression (~77 kbps).
-- Noise Reduction Off/Low/Medium/High (adaptive expander), Voice presets: Off, Natural, Clear, Bold (slider), Podcast, Streaming, Meeting. Live बदलते हैं.
-- Auto reconnect + connection status (ACK), Wi-Fi ही चुना जाए (बिना इंटरनेट के भी).
-- Windows: latency selector, jitter buffer, loss/jitter/bitrate/latency display, monitor (headphones), recording (WAV), tray, optional auto-start, installer.
-- Phone पर optional WAV recording (app की Music folder में).
+## Features (v0.3)
+- **Connection:** Wi-Fi (पहले), USB cable (USB tethering), Bluetooth (tethering; असली BT mic नहीं). Auto-discovery + auto reconnect.
+- **Codec:** Opus (48 kHz mono, VOIP) + AES-256-GCM encryption (key = PIN से). Quality: Low/Medium/High/Ultra (16/24/40/64 kbps). Packet loss पर Opus PLC.
+- **Ultra-low latency:** Latency Ultra Low (10 ms frames) / Low / Balanced / High Quality; Windows पर छोटा jitter buffer (20 ms तक) जो नेटवर्क बिगड़ने पर अपने-आप थोड़ा बढ़ता है.
+- **Phone DSP chain:** High-pass -> Noise Gate -> EQ -> De-esser -> Compressor -> Limiter (सब live, sliders के साथ).
+- **Voice presets:** Off, Natural, Clear, Bold (slider), Podcast, Streaming, Meeting.
+- **RNNoise (AI noise removal):** Windows receiver में checkbox (native library से; न मिले तो app बिना इसके चलता है).
+- **Virtual mic:** VB-Cable के ज़रिए (docs/VIRTUAL_MIC.md).
+- Windows: monitor (headphones), WAV recording, tray, optional auto-start, installer, loss/jitter/bitrate/latency display.
 
 ## सीमाएँ (ईमानदारी से)
-- Opus नहीं (ADPCM). RNNoise/AI noise removal नहीं. QR pairing नहीं. Sample-rate selector नहीं (16 kHz mono).
-- PIN से बनी key: आम sniffing से बचाती है, पर 6-digit PIN के कारण दृढ़ हमलावर के लिए कमज़ोर है. असली key-exchange बाद में.
-- अपना virtual mic driver नहीं; VB-Cable चाहिए (installer उसका link खोल सकता है, bundle नहीं करता).
+- RNNoise PC पर चलता है (phone पर नहीं), यानी phone की EQ/compressor उससे पहले लगती है. सबसे साफ नतीजे के लिए noisy जगह में "Natural" preset से शुरू करें.
+- अपना virtual mic driver नहीं (signed kernel driver चाहिए) -- VB-Cable चाहिए.
+- QR pairing, sample-rate selector नहीं. PIN 6 अंकों का है (असली key-exchange बाद में).
 - कुछ भी अभी compile/test नहीं हुआ. Build error आए तो log भेजें.
+
+---
+Created by Amarjeet K Gupta - WhatsApp No: 8707018073

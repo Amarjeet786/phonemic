@@ -1,10 +1,11 @@
 <Window x:Class="PhoneMic.Windows.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Phone Mic Receiver" Width="470" Height="760" MinHeight="500">
+        Title="Phone Mic Receiver - by Amarjeet K Gupta" Width="470" Height="760" MinHeight="500">
     <ScrollViewer VerticalScrollBarVisibility="Auto">
         <StackPanel Margin="20">
             <TextBlock Text="PHONE MIC" FontSize="26" FontWeight="Bold"/>
+            <TextBlock Text="Created by Amarjeet K Gupta - WhatsApp No: 8707018073" FontSize="12" Foreground="#1565C0" FontWeight="SemiBold"/>
             <TextBlock x:Name="StatusText" Text="● Stopped" Margin="0,6,0,4" FontSize="15" Foreground="Gray"/>
             <TextBlock x:Name="StatsText" Text="" Foreground="DimGray" TextWrapping="Wrap" Margin="0,0,0,12"/>
 
@@ -16,7 +17,10 @@
             </StackPanel>
 
             <TextBlock Text="Output device (choose 'CABLE Input' for a virtual mic)"/>
-            <ComboBox x:Name="DeviceCombo" Margin="0,4,0,12"/>
+            <ComboBox x:Name="DeviceCombo" Margin="0,4,0,4"/>
+            <Button x:Name="RefreshDevicesButton" Content="Refresh devices" HorizontalAlignment="Left" Padding="10,3" Margin="0,0,0,6" Click="RefreshDevices_Click"/>
+            <TextBlock x:Name="CableWarn" Visibility="Collapsed" Foreground="DarkOrange" TextWrapping="Wrap" Margin="0,0,0,12"
+                       Text="VB-Cable not found. Without it your phone's voice plays on the speakers and Zoom/OBS cannot use it as a microphone. Install VB-Cable (vb-audio.com/Cable), restart the PC, then press Refresh devices."/>
 
             <TextBlock Text="Latency"/>
             <ComboBox x:Name="LatencyCombo" Margin="0,4,0,12" SelectionChanged="LatencyCombo_SelectionChanged">
@@ -25,6 +29,8 @@
                 <ComboBoxItem Content="Balanced"/>
                 <ComboBoxItem Content="High Quality"/>
             </ComboBox>
+
+            <CheckBox x:Name="RnnoiseCheck" Content="AI noise removal (RNNoise)" Checked="RnnoiseCheck_Changed" Unchecked="RnnoiseCheck_Changed" Margin="0,0,0,12"/>
 
             <TextBlock Text="Input level"/>
             <ProgressBar x:Name="LevelBar" Height="14" Maximum="100" Margin="0,4,0,12"/>
@@ -54,6 +60,7 @@
             <CheckBox x:Name="TrayCheck" Content="Minimize to the system tray" Checked="TrayCheck_Changed" Unchecked="TrayCheck_Changed" Margin="0,0,0,12"/>
 
             <Button x:Name="StartButton" Content="START RECEIVER" Height="42" Click="StartButton_Click"/>
+            <TextBlock Text="Created by Amarjeet K Gupta - WhatsApp No: 8707018073" FontSize="12" Foreground="#1565C0" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,14,0,4"/>
         </StackPanel>
     </ScrollViewer>
 </Window>

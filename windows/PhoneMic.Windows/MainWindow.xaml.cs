@@ -6,6 +6,7 @@ using System.Linq;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
@@ -15,12 +16,13 @@ using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Threading;
 using Microsoft.Win32;
+using Concentus;
 using NAudio.Wave;
 
 namespace PhoneMic.Windows;
 
 /// <summary>
-/// Receiver: UDP (encrypted ADPCM) -> jitter buffer -> selected output device (+ optional monitor + WAV recording).
+/// Receiver: UDP (encrypted Opus) -> Opus decode (+PLC) -> RNNoise -> jitter buffer -> selected output device (+ optional monitor + WAV recording).
 /// Packet = "PMC2"(4) codec(1) session(4 LE) seq(4 LE) + AES-GCM(payload)+tag(16).
 /// </summary>
 public partial class MainWindow : Window
@@ -28,8 +30,9 @@ public partial class MainWindow : Window
     private const int Port = 50505;
     private const int DiscoveryPort = 50506;
     private const int HeaderSize = 13;
-    private const int BytesPerMs = 32; // 16 kHz * 16 bit * mono
-    private static readonly int[] LatencyTargets = { 40, 70, 110, 180 };
+    private const int BytesPerMs = 96; // 48 kHz * 16 bit * mono
+    private static readonly int[] LatencyTargets = { 20, 40, 80, 140 };
+    private static readonly int[] OutLatencies = { 30, 40, 60, 100 };
 
     private readonly AppSettings _settings = AppSettings.Load();
     private bool _loading = true;
@@ -47,8 +50,15 @@ public partial class MainWindow : Window
     private volatile float _monGain = 0.5f;
     private volatile bool _muted;
     private volatile bool _monitor;
-    private volatile int _targetMs = 70;
+    private volatile int _targetMs = 40;
+    private volatile int _outLatencyMs = 40;
     private volatile int _extraMs;
+
+    private IOpusDecoder? _opus;
+    private int _lastFrame = 960;
+    private double _frameMs = 20;
+    private RnnoiseDenoiser? _rnnoise;
+    private volatile bool _rnnoiseOn;
 
     private readonly object _statLock = new();
     private long _lastPacketTicks;
@@ -82,20 +92,28 @@ public partial class MainWindow : Window
         PinText.Text = "PIN: " + _settings.Pin;
         ShowIps();
 
-        var devices = new List<string>();
-        for (int i = 0; i < WaveOut.DeviceCount; i++) devices.Add(WaveOut.GetCapabilities(i).ProductName);
-        DeviceCombo.ItemsSource = devices;
-        MonitorCombo.ItemsSource = devices;
-        DeviceCombo.SelectedIndex = PickDevice(devices, _settings.OutputDevice, d => d.Contains("CABLE Input", StringComparison.OrdinalIgnoreCase));
-        MonitorCombo.SelectedIndex = PickDevice(devices, _settings.MonitorDevice, d => !d.Contains("CABLE", StringComparison.OrdinalIgnoreCase));
+        LoadDevices(_settings.OutputDevice, _settings.MonitorDevice);
 
         LatencyCombo.SelectedIndex = Math.Clamp(_settings.Latency, 0, 3);
         _targetMs = LatencyTargets[LatencyCombo.SelectedIndex];
+        _outLatencyMs = OutLatencies[LatencyCombo.SelectedIndex];
         VolumeSlider.Value = _settings.Volume;
         _gain = (float)(_settings.Volume / 100.0);
         MonitorSlider.Value = _settings.MonitorVolume;
         _monGain = (float)(_settings.MonitorVolume / 100.0);
         TrayCheck.IsChecked = _settings.MinimizeToTray;
+        _rnnoise = RnnoiseDenoiser.TryCreate();
+        if (_rnnoise == null)
+        {
+            RnnoiseCheck.IsEnabled = false;
+            RnnoiseCheck.IsChecked = false;
+            RnnoiseCheck.Content = "AI noise removal (RNNoise): not available on this PC";
+        }
+        else
+        {
+            RnnoiseCheck.IsChecked = _settings.Rnnoise;
+            _rnnoiseOn = _settings.Rnnoise;
+        }
         AutoStartCheck.IsChecked = IsAutoStartEnabled();
 
         SetupTray();
@@ -132,6 +150,25 @@ public partial class MainWindow : Window
         i = devices.FindIndex(d => fallback(d));
         if (i >= 0) return i;
         return devices.Count > 0 ? 0 : -1;
+    }
+
+    private void LoadDevices(string wantOut, string wantMon)
+    {
+        var devices = new List<string>();
+        for (int i = 0; i < WaveOut.DeviceCount; i++) devices.Add(WaveOut.GetCapabilities(i).ProductName);
+        DeviceCombo.ItemsSource = devices;
+        MonitorCombo.ItemsSource = devices;
+        DeviceCombo.SelectedIndex = PickDevice(devices, wantOut, d => d.Contains("CABLE Input", StringComparison.OrdinalIgnoreCase));
+        MonitorCombo.SelectedIndex = PickDevice(devices, wantMon, d => !d.Contains("CABLE", StringComparison.OrdinalIgnoreCase));
+        bool hasCable = devices.Any(d => d.Contains("CABLE Input", StringComparison.OrdinalIgnoreCase));
+        CableWarn.Visibility = hasCable ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    private void RefreshDevices_Click(object sender, RoutedEventArgs e)
+    {
+        if (_udp != null) return; // stop the receiver first
+        LoadDevices(DeviceCombo.SelectedItem as string ?? "", MonitorCombo.SelectedItem as string ?? "");
+        ShowIps();
     }
 
     private void ShowIps()
@@ -222,10 +259,11 @@ public partial class MainWindow : Window
         try
         {
             _aes = new AesGcm(Crypto.DeriveKey(_settings.Pin), 16);
-            var fmt = new WaveFormat(16000, 16, 1);
+            var fmt = new WaveFormat(48000, 16, 1);
+            _outLatencyMs = OutLatencies[Math.Clamp(LatencyCombo.SelectedIndex, 0, 3)];
 
             _buffer = new BufferedWaveProvider(fmt) { BufferDuration = TimeSpan.FromMilliseconds(1000), DiscardOnBufferOverflow = true };
-            _output = new WaveOutEvent { DeviceNumber = Math.Max(0, DeviceCombo.SelectedIndex), DesiredLatency = 60 };
+            _output = new WaveOutEvent { DeviceNumber = Math.Max(0, DeviceCombo.SelectedIndex), DesiredLatency = _outLatencyMs };
             _output.Init(_buffer);
             _output.Play();
 
@@ -249,6 +287,9 @@ public partial class MainWindow : Window
                 _lastArrivalMs = -1; _bytesWindow = 0; _underruns = 0; _extraMs = 0;
             }
             Interlocked.Exchange(ref _lastPacketTicks, 0);
+            _opus = null;
+            _lastFrame = 960;
+            _frameMs = 20;
 
             _udp = new UdpClient(Port);
             NetUtil.DisableConnReset(_udp);
@@ -289,6 +330,7 @@ public partial class MainWindow : Window
         _monBuffer = null;
         _aes?.Dispose();
         _aes = null;
+        _opus = null;
         StopRecording();
         StartButton.Content = "START RECEIVER";
         DeviceCombo.IsEnabled = true;
@@ -305,6 +347,7 @@ public partial class MainWindow : Window
         SaveSettings();
         StopReceiver();
         try { _discovery?.Close(); } catch { }
+        try { _rnnoise?.Dispose(); } catch { }
         if (_tray != null) { _tray.Visible = false; _tray.Dispose(); }
     }
 
@@ -316,6 +359,7 @@ public partial class MainWindow : Window
         _settings.Volume = VolumeSlider.Value;
         _settings.MonitorVolume = MonitorSlider.Value;
         _settings.MinimizeToTray = TrayCheck.IsChecked == true;
+        _settings.Rnnoise = RnnoiseCheck.IsChecked == true;
         _settings.Save();
     }
 
@@ -361,20 +405,21 @@ public partial class MainWindow : Window
         catch (CryptographicException) { return; }
 
         double nowMs = _clock.Elapsed.TotalMilliseconds;
+        long gap = 0;
         lock (_statLock)
         {
             if (!_haveSession || session != _session)
             {
-                _session = session; _haveSession = true; _lastSeq = -1;
+                _session = session; _haveSession = true; _lastSeq = -1; _opus = null;
                 _received = 0; _lost = 0; _jitter = 0; _lastArrivalMs = -1;
             }
             if (seq <= _lastSeq) return; // replay / duplicate / late
-            if (_lastSeq >= 0 && seq > _lastSeq + 1) _lost += seq - _lastSeq - 1;
+            if (_lastSeq >= 0 && seq > _lastSeq + 1) { gap = seq - _lastSeq - 1; _lost += gap; }
             _lastSeq = seq;
             _received++;
             if (_lastArrivalMs >= 0)
             {
-                double dev = Math.Abs((nowMs - _lastArrivalMs) - 20.0);
+                double dev = Math.Abs((nowMs - _lastArrivalMs) - _frameMs);
                 _jitter += (dev - _jitter) / 16.0;
             }
             _lastArrivalMs = nowMs;
@@ -398,14 +443,42 @@ public partial class MainWindow : Window
             catch { }
         }
 
-        short[] pcm;
-        if (codec == 1) pcm = Adpcm.Decode(plain, 0, plain.Length);
-        else
+        if (codec != 2) return; // 2 = Opus
+        var frames = new List<short[]>(2);
+        try
         {
-            pcm = new short[plain.Length / 2];
-            Buffer.BlockCopy(plain, 0, pcm, 0, pcm.Length * 2);
+            var dec = _opus ??= OpusCodecFactory.CreateDecoder(48000, 1);
+
+            // Conceal short gaps with Opus packet-loss concealment so a lost packet does not click.
+            if (gap > 0 && gap <= 3 && _lastFrame > 0)
+            {
+                for (long g = 0; g < gap; g++)
+                {
+                    var plc = new short[_lastFrame];
+                    int pn = dec.Decode(ReadOnlySpan<byte>.Empty, plc.AsSpan(), _lastFrame);
+                    if (pn > 0) frames.Add(pn == plc.Length ? plc : plc.AsSpan(0, pn).ToArray());
+                }
+            }
+
+            var pcmBuf = new short[5760];
+            int n = dec.Decode(plain.AsSpan(), pcmBuf.AsSpan(), 5760);
+            if (n <= 0) return;
+            _lastFrame = n;
+            _frameMs = n / 48.0;
+            frames.Add(pcmBuf.AsSpan(0, n).ToArray());
         }
-        if (pcm.Length == 0) return;
+        catch (Exception) { return; }
+
+        foreach (var f in frames) Emit(f);
+    }
+
+    /// <summary>RNNoise -> volume/mute -> jitter buffer -> output, monitor, recording, level meter.</summary>
+    private void Emit(short[] pcm)
+    {
+        var buf = _buffer;
+        if (buf == null || pcm.Length == 0) return;
+
+        if (_rnnoiseOn) _rnnoise?.Process(pcm, pcm.Length);
 
         float gain = _muted ? 0f : _gain;
         var main = new byte[pcm.Length * 2];
@@ -421,7 +494,7 @@ public partial class MainWindow : Window
         // Jitter buffer: prefill after an underrun, drop packets if we drift too far ahead.
         int targetBytes = (_targetMs + _extraMs) * BytesPerMs;
         int buffered = buf.BufferedBytes;
-        if (buffered < 320)
+        if (buffered < 5 * BytesPerMs)
         {
             long rc;
             lock (_statLock) rc = _received;
@@ -435,7 +508,7 @@ public partial class MainWindow : Window
         }
         else if (buffered > targetBytes + 60 * BytesPerMs)
         {
-            return; // too far ahead: drop this packet to keep latency bounded
+            return; // too far ahead: drop this frame to keep latency bounded
         }
         buf.AddSamples(main, 0, main.Length);
 
@@ -499,7 +572,7 @@ public partial class MainWindow : Window
             double lossPct = (rec + lost) > 0 ? 100.0 * lost / (rec + lost) : 0;
             var buf = _buffer;
             double bufMs = buf != null ? buf.BufferedBytes / (double)BytesPerMs : 0;
-            double latency = bufMs + 60 + 25; // buffer + output device + capture/network (approximate)
+            double latency = bufMs + _outLatencyMs + _frameMs + 10; // buffer + output device + frame + network (approximate)
             string quality = (lossPct < 1 && jitter < 10) ? "Excellent" : (lossPct < 3 && jitter < 25) ? "Good" : "Poor";
             StatsText.Text = $"Connection: {quality}   Latency ≈ {latency:0} ms\n" +
                              $"Packet loss: {lossPct:0.0}%   Jitter: {jitter:0} ms   Bitrate: {kbps:0} kbps   Underruns: {underruns}";
@@ -537,7 +610,7 @@ public partial class MainWindow : Window
             string path = Path.Combine(dir, "PhoneMic_" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".wav");
             lock (_recLock)
             {
-                _rec = new WaveFileWriter(path, new WaveFormat(16000, 16, 1));
+                _rec = new WaveFileWriter(path, new WaveFormat(48000, 16, 1));
                 _recStart = DateTime.Now;
                 _recPath = path;
             }
@@ -578,6 +651,7 @@ public partial class MainWindow : Window
     {
         if (_loading || LatencyCombo.SelectedIndex < 0) return;
         _targetMs = LatencyTargets[LatencyCombo.SelectedIndex];
+        if (_udp == null) _outLatencyMs = OutLatencies[LatencyCombo.SelectedIndex]; // device latency applies on next start
     }
 
     private void VolumeSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
@@ -591,6 +665,11 @@ public partial class MainWindow : Window
 
     private void MonitorCheck_Changed(object sender, RoutedEventArgs e)
         => _monitor = MonitorCheck.IsChecked == true;
+
+    private void RnnoiseCheck_Changed(object sender, RoutedEventArgs e)
+    {
+        _rnnoiseOn = RnnoiseCheck.IsChecked == true && _rnnoise != null;
+    }
 
     private void TrayCheck_Changed(object sender, RoutedEventArgs e)
     {

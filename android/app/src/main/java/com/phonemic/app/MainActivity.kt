@@ -55,6 +55,8 @@ private fun stopMic(ctx: Context) {
 }
 
 private val NOISE_NAMES = listOf("Off", "Low", "Medium", "High")
+private val QUALITY_NAMES = listOf("Low", "Medium", "High", "Ultra")
+private val LATENCY_NAMES = listOf("Ultra Low", "Low", "Balanced", "High Quality")
 
 @Composable
 fun MainScreen() {
@@ -68,13 +70,17 @@ fun MainScreen() {
     var agc by remember { mutableStateOf(prefs.getBoolean("agc", true)) }
     var mode by remember { mutableStateOf(prefs.getString("mode", "wifi") ?: "wifi") }
     var recordOnPhone by remember { mutableStateOf(prefs.getBoolean("rec", false)) }
+    var showAdvanced by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         MicState.wifiConnected = Discovery.isWifiConnected(ctx)
         if (!MicState.running) {
             MicState.noiseLevel = prefs.getInt("noise", 2)
-            MicState.voice = prefs.getString("voice", "Natural") ?: "Natural"
+            MicState.quality = prefs.getInt("quality", 1)
+            MicState.latencyMode = prefs.getInt("latency", 1)
             MicState.boldness = prefs.getFloat("bold", 0.6f)
+            val v = prefs.getString("voice", "Natural") ?: "Natural"
+            MicState.applyPreset(if (VoicePresets.names.contains(v)) v else "Natural")
         }
     }
 
@@ -82,7 +88,8 @@ fun MainScreen() {
         prefs.edit()
             .putString("ip", ip).putString("pin", pin).putString("mode", mode)
             .putBoolean("aec", aec).putBoolean("ns", ns).putBoolean("agc", agc).putBoolean("rec", recordOnPhone)
-            .putInt("noise", MicState.noiseLevel).putString("voice", MicState.voice)
+            .putInt("noise", MicState.noiseLevel).putInt("quality", MicState.quality)
+            .putInt("latency", MicState.latencyMode).putString("voice", MicState.voice)
             .putFloat("bold", MicState.boldness)
             .apply()
     }
@@ -107,6 +114,7 @@ fun MainScreen() {
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         Text("PHONE MIC", style = MaterialTheme.typography.headlineMedium)
+        Text("Created by Amarjeet K Gupta - WhatsApp No: 8707018073", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
         Text("● ${MicState.status}", color = statusColor)
         Text(
             "Microphone access is needed only to send your voice to the PC you choose. " +
@@ -145,7 +153,14 @@ fun MainScreen() {
                 MicState.wifiConnected = Discovery.isWifiConnected(ctx)
                 MicState.scanning = true
                 Thread {
-                    MicState.pcs = Discovery.scan()
+                    val list = Discovery.scan()
+                    MicState.pcs = list
+                    // Wi-Fi first: pick the best PC automatically if the current IP is not among the results.
+                    val first = list.firstOrNull()
+                    if (first != null && list.none { it.ip == ip }) {
+                        ip = first.ip
+                        mode = when (first.via) { "USB cable" -> "usb"; "Bluetooth" -> "bluetooth"; else -> "wifi" }
+                    }
                     MicState.scanning = false
                 }.start()
             },
@@ -167,21 +182,46 @@ fun MainScreen() {
         Text("Input level", style = MaterialTheme.typography.titleSmall)
         LinearProgressIndicator(progress = { MicState.level }, modifier = Modifier.fillMaxWidth().height(12.dp))
 
-        // ---- Noise reduction ----
-        Text("Noise Reduction", style = MaterialTheme.typography.titleSmall)
+        // ---- Latency + quality (Opus) ----
+        Text("Latency", style = MaterialTheme.typography.titleSmall)
+        ChipRow(LATENCY_NAMES, LATENCY_NAMES[MicState.latencyMode.coerceIn(0, 3)]) {
+            if (!MicState.running) MicState.latencyMode = LATENCY_NAMES.indexOf(it)
+        }
+        Text(
+            "Ultra Low sends 10 ms frames: least delay, but needs a strong Wi-Fi or USB link. Set before connecting.",
+            style = MaterialTheme.typography.bodySmall
+        )
+        Text("Audio quality (Opus)", style = MaterialTheme.typography.titleSmall)
+        ChipRow(QUALITY_NAMES, QUALITY_NAMES[MicState.quality.coerceIn(0, 3)]) { MicState.quality = QUALITY_NAMES.indexOf(it) }
+
+        // ---- Noise gate ----
+        Text("Noise Gate / Reduction", style = MaterialTheme.typography.titleSmall)
         ChipRow(NOISE_NAMES, NOISE_NAMES[MicState.noiseLevel.coerceIn(0, 3)]) { MicState.noiseLevel = NOISE_NAMES.indexOf(it) }
         Text(
-            "Lowers steady background noise between words (fan, AC, hum). Higher levels remove more but can clip word endings.",
+            "Lowers steady background noise between words. For AI noise removal (RNNoise) use the option in the Windows app.",
             style = MaterialTheme.typography.bodySmall
         )
 
-        // ---- Voice enhancement ----
-        Text("Voice Enhancement", style = MaterialTheme.typography.titleSmall)
-        ChipRow(VoicePresets.names, MicState.voice) { MicState.voice = it }
+        // ---- Voice presets ----
+        Text("Voice Presets", style = MaterialTheme.typography.titleSmall)
+        ChipRow(VoicePresets.names, MicState.voice) { MicState.applyPreset(it) }
         if (MicState.voice == "Bold") {
             Text("Boldness: ${(MicState.boldness * 100).toInt()}%")
-            Slider(value = MicState.boldness, onValueChange = { MicState.boldness = it }, valueRange = 0f..1f)
+            Slider(value = MicState.boldness, onValueChange = { MicState.boldness = it; MicState.applyPreset("Bold") }, valueRange = 0f..1f)
             Text("Adds warmth and body to the voice and evens out the volume.", style = MaterialTheme.typography.bodySmall)
+        }
+
+        // ---- Advanced: EQ / De-esser / Compressor / Limiter ----
+        SwitchRow("Advanced voice controls (EQ, De-esser, Compressor, Limiter)", showAdvanced, { showAdvanced = it }, note = null)
+        if (showAdvanced) {
+            Text("Preset: ${MicState.voice}", style = MaterialTheme.typography.bodySmall)
+            SliderRow("EQ warmth (low): ${"%.1f".format(MicState.lowDb)} dB", MicState.lowDb, -6f..8f) { MicState.lowDb = it; MicState.markCustom() }
+            SliderRow("EQ clarity (presence): ${"%.1f".format(MicState.presenceDb)} dB", MicState.presenceDb, -3f..8f) { MicState.presenceDb = it; MicState.markCustom() }
+            SliderRow("EQ harshness control (high): ${"%.1f".format(MicState.harshDb)} dB", MicState.harshDb, -6f..3f) { MicState.harshDb = it; MicState.markCustom() }
+            SliderRow("De-esser: ${(MicState.deEss * 100).toInt()}%", MicState.deEss, 0f..1f) { MicState.deEss = it; MicState.markCustom() }
+            SliderRow("Compressor threshold: ${MicState.thresholdDb.toInt()} dB", MicState.thresholdDb, -40f..-6f) { MicState.thresholdDb = it; MicState.markCustom() }
+            SliderRow("Compressor makeup gain: ${"%.1f".format(MicState.makeupDb)} dB", MicState.makeupDb, 0f..10f) { MicState.makeupDb = it; MicState.markCustom() }
+            SliderRow("Limiter ceiling: ${"%.1f".format(MicState.ceilingDb)} dB", MicState.ceilingDb, -6f..-0.5f) { MicState.ceilingDb = it; MicState.markCustom() }
         }
 
         // ---- Phone effects ----
@@ -209,6 +249,14 @@ fun MainScreen() {
         if (MicState.recordPath.isNotEmpty()) {
             Text("Recording file: ${MicState.recordPath}", style = MaterialTheme.typography.bodySmall)
         }
+
+        HorizontalDivider()
+        Text(
+            "Created by Amarjeet K Gupta - WhatsApp No: 8707018073",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)
+        )
     }
 }
 
@@ -218,6 +266,14 @@ private fun ChipRow(options: List<String>, selected: String, onSelect: (String) 
         options.forEach { name ->
             FilterChip(selected = name == selected, onClick = { onSelect(name) }, label = { Text(name) })
         }
+    }
+}
+
+@Composable
+private fun SliderRow(label: String, value: Float, range: ClosedFloatingPointRange<Float>, onChange: (Float) -> Unit) {
+    Column {
+        Text(label, style = MaterialTheme.typography.bodySmall)
+        Slider(value = value.coerceIn(range.start, range.endInclusive), onValueChange = onChange, valueRange = range)
     }
 }
 

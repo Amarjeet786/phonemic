@@ -35,7 +35,7 @@ import kotlin.math.abs
 /**
  * Foreground service. Pipeline per 20 ms frame:
  * mic (VOICE_COMMUNICATION + AEC/NS/AGC) -> AudioProcessor -> [optional WAV on phone]
- * -> ADPCM -> AES-GCM -> UDP. The PC sends small ACKs; if they stop, the status shows
+ * -> Opus -> AES-GCM -> UDP. The PC sends small ACKs; if they stop, the status shows
  * "Connection lost" and the app keeps trying (streaming resumes by itself).
  *
  * Packet = "PMC2"(4) codec(1) session(4 LE) seq(4 LE) + AES-GCM(payload)+tag(16).
@@ -53,8 +53,9 @@ class MicService : Service() {
         const val EXTRA_MODE = "mode" // wifi | usb | bluetooth
         const val EXTRA_REC = "rec"
         private const val CHANNEL_ID = "mic_stream"
-        private const val SAMPLE_RATE = 16000
-        private const val FRAME = 320 // 20 ms
+        private const val SAMPLE_RATE = 48000
+        private val BITRATES = intArrayOf(16000, 24000, 40000, 64000)
+        private val FRAME_MS = intArrayOf(10, 20, 20, 40)
     }
 
     @Volatile private var active = false
@@ -189,10 +190,12 @@ class MicService : Service() {
             val minBuf = AudioRecord.getMinBufferSize(
                 SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
             )
+            val frameMs = FRAME_MS[MicState.latencyMode.coerceIn(0, 3)]
+            val frame = SAMPLE_RATE / 1000 * frameMs
             rec = AudioRecord(
                 MediaRecorder.AudioSource.VOICE_COMMUNICATION, SAMPLE_RATE,
                 AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT,
-                maxOf(minBuf, FRAME * 2 * 4)
+                maxOf(minBuf, frame * 2 * 4)
             )
             if (rec.state != AudioRecord.STATE_INITIALIZED) {
                 MicState.status = "Could not open microphone"
@@ -226,27 +229,25 @@ class MicService : Service() {
             lastAck = System.currentTimeMillis()
             everAcked = false
 
-            val proc = AudioProcessor(SAMPLE_RATE)
-            val enc = AdpcmEncoder()
-            var appliedVoice = ""
-            var appliedBold = -1f
+            val proc = AudioProcessor(SAMPLE_RATE, frameMs)
+            val enc = OpusPacketEncoder(BITRATES[MicState.quality.coerceIn(0, 3)])
+            var applied: VoicePreset? = null
 
-            val shorts = ShortArray(FRAME)
+            val shorts = ShortArray(frame)
             val header = ByteArray(13)
             var seq = 0
             while (active) {
-                val n = rec.read(shorts, 0, FRAME)
-                if (n != FRAME) continue
+                val n = rec.read(shorts, 0, frame)
+                if (n != frame) continue
 
                 // Live settings (changes from the UI apply immediately).
-                val v = MicState.voice
-                val b = MicState.boldness
-                if (v != appliedVoice || b != appliedBold) {
-                    proc.setVoice(VoicePresets.get(v, b))
-                    appliedVoice = v
-                    appliedBold = b
+                val cur = MicState.current()
+                if (cur != applied) {
+                    proc.setVoice(cur)
+                    applied = cur
                 }
                 proc.noiseLevel = MicState.noiseLevel
+                enc.setBitrate(BITRATES[MicState.quality.coerceIn(0, 3)])
                 proc.process(shorts, n)
 
                 wav?.write(shorts, n)
@@ -258,10 +259,10 @@ class MicService : Service() {
                 }
                 MicState.level = (peak / 32768f).coerceIn(0f, 1f)
 
-                val payload = enc.encode(shorts, n)
+                val payload = enc.encode(shorts, frame)
                 val hb = ByteBuffer.wrap(header).order(ByteOrder.LITTLE_ENDIAN)
                 hb.put('P'.code.toByte()).put('M'.code.toByte()).put('C'.code.toByte()).put('2'.code.toByte())
-                hb.put(1.toByte()) // codec 1 = ADPCM
+                hb.put(2.toByte()) // codec 2 = Opus
                 hb.putInt(session).putInt(seq)
                 val ct = Crypto.encrypt(key, header, session, seq, payload)
                 val out = ByteArray(13 + ct.size)

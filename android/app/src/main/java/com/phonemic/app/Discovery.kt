@@ -90,6 +90,7 @@ object Discovery {
         } finally {
             sockets.forEach { try { it.first.close() } catch (_: Exception) {} }
         }
-        return found.values.toList()
+        // Wi-Fi results first.
+        return found.values.sortedBy { if (it.via == "Wi-Fi") 0 else 1 }
     }
 }

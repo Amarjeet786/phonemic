@@ -2,9 +2,11 @@ package com.phonemic.app
 
 import kotlin.math.PI
 import kotlin.math.abs
+import kotlin.math.ceil
 import kotlin.math.cos
 import kotlin.math.exp
 import kotlin.math.log10
+import kotlin.math.min
 import kotlin.math.pow
 import kotlin.math.sign
 import kotlin.math.sin
@@ -88,12 +90,14 @@ class Biquad private constructor() {
 }
 
 data class VoicePreset(
-    val lowDb: Double,       // low shelf @ 180 Hz (warmth / body)
-    val presenceDb: Double,  // peak @ 3 kHz (clarity)
-    val harshDb: Double,     // high shelf @ 6.5 kHz (negative = tame harshness)
-    val thresholdDb: Double, // compressor threshold
+    val lowDb: Double,        // low shelf @ 180 Hz (warmth / body)
+    val presenceDb: Double,   // peak @ 3 kHz (clarity)
+    val harshDb: Double,      // high shelf @ 6.5 kHz (negative = tame harshness)
+    val thresholdDb: Double,  // compressor threshold
     val ratio: Double,
     val makeupDb: Double,
+    val deEss: Double = 0.0,  // 0..1 de-esser amount
+    val ceilingDb: Double = -1.5, // limiter ceiling
     val enabled: Boolean = true
 )
 
@@ -101,46 +105,55 @@ object VoicePresets {
     val names = listOf("Off", "Natural", "Clear", "Bold", "Podcast", "Streaming", "Meeting")
 
     fun get(name: String, boldness: Float): VoicePreset = when (name) {
-        "Off" -> VoicePreset(0.0, 0.0, 0.0, 0.0, 1.0, 0.0, enabled = false)
-        "Clear" -> VoicePreset(-2.0, 4.0, -1.0, -20.0, 2.5, 3.0)
+        "Off" -> VoicePreset(0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, -1.5, enabled = false)
+        "Clear" -> VoicePreset(-2.0, 4.0, -1.0, -20.0, 2.5, 3.0, 0.4)
         "Bold" -> {
             val b = boldness.toDouble().coerceIn(0.0, 1.0)
-            VoicePreset(1.0 + 6.0 * b, 2.0 + 2.0 * b, -1.0 - 1.5 * b, -20.0 - 4.0 * b, 2.0 + 2.5 * b, 3.0 + 3.0 * b)
+            VoicePreset(1.0 + 6.0 * b, 2.0 + 2.0 * b, -1.0 - 1.5 * b, -20.0 - 4.0 * b, 2.0 + 2.5 * b, 3.0 + 3.0 * b, 0.3)
         }
-        "Podcast" -> VoicePreset(3.0, 2.0, -1.5, -22.0, 3.0, 4.0)
-        "Streaming" -> VoicePreset(2.0, 3.0, -1.0, -20.0, 3.5, 4.0)
-        "Meeting" -> VoicePreset(-1.0, 4.0, -1.0, -18.0, 2.5, 3.0)
-        else -> VoicePreset(0.0, 1.0, 0.0, -20.0, 1.8, 2.0) // Natural
+        "Podcast" -> VoicePreset(3.0, 2.0, -1.5, -22.0, 3.0, 4.0, 0.4)
+        "Streaming" -> VoicePreset(2.0, 3.0, -1.0, -20.0, 3.5, 4.0, 0.4)
+        "Meeting" -> VoicePreset(-1.0, 4.0, -1.0, -18.0, 2.5, 3.0, 0.3)
+        else -> VoicePreset(0.0, 1.0, 0.0, -20.0, 1.8, 2.0, 0.2) // Natural
     }
 }
 
 /**
- * Software voice pipeline (per 20 ms frame, in place):
- * high-pass 90 Hz -> adaptive noise expander -> voice EQ -> compressor -> soft limiter.
- * The noise stage is a time-domain expander (not spectral / AI): it lowers the level
- * between words. Steady noise that is present WHILE you speak is not removed by it.
+ * Software voice pipeline (per frame, in place, 48 kHz):
+ * high-pass 90 Hz -> noise gate/expander -> EQ (low shelf, presence, air) -> de-esser
+ * -> compressor -> limiter.
+ * The gate lowers the level between words; steady noise present WHILE you speak is handled by
+ * the phone's built-in suppressor and by RNNoise on the PC.
  */
-class AudioProcessor(private val fs: Int) {
+class AudioProcessor(private val fs: Int, frameMs: Int) {
     @Volatile var noiseLevel = 0
 
     private val hpf = Biquad.highPass(fs.toDouble(), 90.0)
     private var low = Biquad.passthrough()
     private var pres = Biquad.passthrough()
     private var harsh = Biquad.passthrough()
+    private val sibBand = Biquad.highPass(fs.toDouble(), 5500.0)
     private var enhance = false
     private var thrLin = 1f
     private var ratio = 1.0
     private var makeupLin = 1f
+    private var deEss = 0f
+    private var ceilLin = 0.84f
 
     private var floor = 0.01f
     private var hold = 0
     private var gateGain = 1f
     private var env = 0f
+    private var sibEnv = 0f
 
+    private val holdFrames = ceil(100.0 / frameMs).toInt().coerceAtLeast(1)
+    private val floorRise = 0.002f * frameMs / 20f
     private val attack = (1 - exp(-1.0 / (0.005 * fs))).toFloat()
     private val release = (1 - exp(-1.0 / (0.12 * fs))).toFloat()
     private val openCoef = (1 - exp(-1.0 / (0.003 * fs))).toFloat()
     private val closeCoef = (1 - exp(-1.0 / (0.03 * fs))).toFloat()
+    private val sibAtk = (1 - exp(-1.0 / (0.001 * fs))).toFloat()
+    private val sibRel = (1 - exp(-1.0 / (0.02 * fs))).toFloat()
 
     fun setVoice(p: VoicePreset) {
         val f = fs.toDouble()
@@ -151,6 +164,8 @@ class AudioProcessor(private val fs: Int) {
         thrLin = 10.0.pow(p.thresholdDb / 20.0).toFloat()
         ratio = p.ratio.coerceAtLeast(1.0)
         makeupLin = 10.0.pow(p.makeupDb / 20.0).toFloat()
+        deEss = p.deEss.coerceIn(0.0, 1.0).toFloat()
+        ceilLin = 10.0.pow(p.ceilingDb.coerceIn(-12.0, -0.1) / 20.0).toFloat()
     }
 
     fun process(buf: ShortArray, n: Int) {
@@ -169,13 +184,14 @@ class AudioProcessor(private val fs: Int) {
         if (level > 0) {
             val factor = when (level) { 1 -> 2.0f; 2 -> 2.5f; else -> 3.0f }
             val depth = when (level) { 1 -> 0.5f; 2 -> 0.25f; else -> 0.1f }
-            if (rms < floor) floor = floor * 0.5f + rms * 0.5f else floor += (rms - floor) * 0.002f
+            if (rms < floor) floor = floor * 0.5f + rms * 0.5f else floor += (rms - floor) * floorRise
             floor = floor.coerceIn(0.0005f, 0.05f)
             val open = rms > floor * factor
-            if (open) hold = 5 else if (hold > 0) hold--
+            if (open) hold = holdFrames else if (hold > 0) hold--
             target = if (open || hold > 0) 1f else depth
         }
 
+        val knee = ceilLin * 0.18f
         for (i in 0 until n) {
             gateGain += (target - gateGain) * (if (target > gateGain) openCoef else closeCoef)
             var v = x[i] * gateGain
@@ -183,6 +199,19 @@ class AudioProcessor(private val fs: Int) {
                 v = low.process(v)
                 v = pres.process(v)
                 v = harsh.process(v)
+
+                // De-esser: pull down the 5.5 kHz+ band only while it is too strong (s, sh, t sounds).
+                val sib = sibBand.process(v)
+                if (deEss > 0f) {
+                    val sa = abs(sib)
+                    sibEnv += (sa - sibEnv) * (if (sa > sibEnv) sibAtk else sibRel)
+                    if (sibEnv > 0.04f) {
+                        val over = min(sibEnv / 0.04f, 4f)
+                        v -= sib * ((1f - 1f / over) * deEss)
+                    }
+                }
+
+                // Compressor
                 val a = abs(v)
                 env += (a - env) * (if (a > env) attack else release)
                 var g = 1f
@@ -192,8 +221,9 @@ class AudioProcessor(private val fs: Int) {
                 }
                 v = v * g * makeupLin
             }
+            // Limiter (soft knee, never exceeds the ceiling)
             val a2 = abs(v)
-            if (a2 > 0.85f) v = sign(v) * (0.85f + 0.15f * tanh((a2 - 0.85f) / 0.15f))
+            if (a2 > ceilLin - knee) v = sign(v) * (ceilLin - knee + knee * tanh((a2 - (ceilLin - knee)) / knee))
             buf[i] = (v * 32767f).toInt().coerceIn(-32768, 32767).toShort()
         }
     }

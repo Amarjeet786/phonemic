@@ -1,6 +1,7 @@
 [Setup]
 AppName=Phone Mic Receiver
-AppVersion=0.2.0
+AppPublisher=Amarjeet K Gupta
+AppVersion=0.3.0
 DefaultDirName={autopf}\PhoneMic
 DefaultGroupName=Phone Mic
 OutputDir=..\installer

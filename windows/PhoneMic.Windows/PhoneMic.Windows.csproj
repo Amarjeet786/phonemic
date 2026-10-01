@@ -10,5 +10,8 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="NAudio" Version="2.2.1" />
+    <PackageReference Include="Concentus" Version="2.2.2" />
+    <!-- Ships the native RNNoise library; loaded by Rnnoise.cs -->
+    <PackageReference Include="YellowDogMan.RRNoise.NET" Version="0.1.9" />
   </ItemGroup>
 </Project>

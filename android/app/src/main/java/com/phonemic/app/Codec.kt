@@ -10,8 +10,8 @@ import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.PBEKeySpec
 import javax.crypto.spec.SecretKeySpec
-import org.concentus.OpusApplication
-import org.concentus.OpusEncoder
+import io.github.jaredmdobson.concentus.OpusApplication
+import io.github.jaredmdobson.concentus.OpusEncoder
 
 /** Opus (pure-Java Concentus), 48 kHz mono, VOIP mode. One packet per frame (10/20/40 ms). */
 class OpusPacketEncoder(bitrate: Int) {
